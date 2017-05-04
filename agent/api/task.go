@@ -452,7 +452,7 @@ func (task *Task) dockerHostBinds(container *Container) (binds []string, err err
 			// VolumeDriver         string                 `json:"VolumeDriver,omitempty" yaml:"VolumeDriver,omitempty"`
 			// goal is to set VolumeDriver to 'blocker' and strip ebs: prefix from SourcePath
 			ebs = true
-			sourcepath := strings.TrimLeft(hv.SourcePath(), ebs_prefix)
+			sourcepath := strings.TrimPrefix(hv.SourcePath(), ebs_prefix)
 			bind += sourcepath + ":" + mountPoint.ContainerPath
 			log.Info("Converting bind string to: " + bind)
 		} else {
