@@ -342,7 +342,7 @@ func (task *Task) dockerHostConfig(container *Container, dockerContainerMap map[
 		return nil, &HostConfigError{err.Error()}
 	}
 
-	binds, err := task.dockerHostBinds(container)
+	binds, err, ebs_active := task.dockerHostBinds(container)
 	if err != nil {
 		return nil, &HostConfigError{err.Error()}
 	}
@@ -352,6 +352,10 @@ func (task *Task) dockerHostConfig(container *Container, dockerContainerMap map[
 		Binds:        binds,
 		PortBindings: dockerPortMap,
 		VolumesFrom:  volumesFrom,
+	}
+
+	if ebs_active {
+		hostConfig.VolumeDriver = "blocker"
 	}
 
 	if container.DockerConfig.HostConfig != nil {
@@ -421,33 +425,46 @@ func (task *Task) dockerVolumesFrom(container *Container, dockerContainerMap map
 	return volumesFrom, nil
 }
 
-func (task *Task) dockerHostBinds(container *Container) ([]string, error) {
+func (task *Task) dockerHostBinds(container *Container) (binds []string, err error, ebs bool) {
 	if container.Name == emptyHostVolumeName {
 		// emptyHostVolumes are handled as a special case in config, not
 		// hostConfig
-		return []string{}, nil
+		return []string{}, nil, false
 	}
 
-	binds := make([]string, len(container.MountPoints))
+	binds = make([]string, len(container.MountPoints))
+	ebs = false
 	for i, mountPoint := range container.MountPoints {
 		hv, ok := task.HostVolumeByName(mountPoint.SourceVolume)
 		if !ok {
-			return []string{}, errors.New("Invalid volume referenced: " + mountPoint.SourceVolume)
+			return []string{}, errors.New("Invalid volume referenced: " + mountPoint.SourceVolume), false
 		}
 
 		if hv.SourcePath() == "" || mountPoint.ContainerPath == "" {
 			log.Error("Unable to resolve volume mounts; invalid path: " + container.Name + " " + mountPoint.SourceVolume + "; " + hv.SourcePath() + " -> " + mountPoint.ContainerPath)
-			return []string{}, errors.New("Unable to resolve volume mounts; invalid path: " + container.Name + " " + mountPoint.SourceVolume + "; " + hv.SourcePath() + " -> " + mountPoint.ContainerPath)
+			return []string{}, errors.New("Unable to resolve volume mounts; invalid path: " + container.Name + " " + mountPoint.SourceVolume + "; " + hv.SourcePath() + " -> " + mountPoint.ContainerPath), false
 		}
 
-		bind := hv.SourcePath() + ":" + mountPoint.ContainerPath
+		ebs_prefix := "ebs:"
+		bind := ""
+		if strings.HasPrefix(hv.SourcePath(), ebs_prefix) {
+			log.Info("Detected an EBS prefix on the sourcePath string: " + hv.SourcePath())
+			// VolumeDriver         string                 `json:"VolumeDriver,omitempty" yaml:"VolumeDriver,omitempty"`
+			// goal is to set VolumeDriver to 'blocker' and strip ebs: prefix from SourcePath
+			ebs = true
+			sourcepath := strings.TrimLeft(hv.SourcePath(), ebs_prefix)
+			bind += sourcepath + ":" + mountPoint.ContainerPath
+			log.Info("Converting bind string to: " + bind)
+		} else {
+			bind += hv.SourcePath() + ":" + mountPoint.ContainerPath
+		}
 		if mountPoint.ReadOnly {
 			bind += ":ro"
 		}
 		binds[i] = bind
 	}
 
-	return binds, nil
+	return binds, nil, ebs
 }
 
 // TaskFromACS translates ecsacs.Task to api.Task by first marshaling the recieved
